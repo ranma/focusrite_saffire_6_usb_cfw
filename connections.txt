@@ -1,0 +1,39 @@
+TUSB3200   CS4272          AK4384   Comment
+19 P3.4                             USB LED ("T0")
+20 P3.5                             MIDI LED ("T1")
+24 P1.0    12 SDA/CDIN              ("INT3")
+25 P1.1    11 SCL/CCLK              ("INT4")
+26 P1.2                             unused? (high level)
+28 P1.3    13 AD0/CS                ("INT6")
+29 P1.4                             unused? (high level)
+30 P1.5                             TP1/LD1 ("T2EX")
+31 P1.6                             Amplifier power control (1=off, 0=on) ("CLKOUT") (high on power-on, then low)
+32 P1.7                             Reset buffer? (1=reset, 0=normal) TR1 ("T2") (high on power-on, then low)
+35 CSYNC
+36 CDATO   7 SDIN
+38 CDATI                   3 SDTI
+40 CSCHNE  6 SDOUT (via R)
+44 MCLKO   3 MCLK
+45 MCLKO2                           Synchronizing freq for 48V phantom power step-up (384KHz @ 48KHz sampling rate)
+48 MCLKI2  5 SCLK          2 BICK
+
+I2S Mode 4:
+CSYNC:  LRCK
+CSCLK:  SCLK
+CDATO:  SDOUT1  CS4272
+CDATI:  SDOUT2  AK4384
+CRESET: SDOUT3
+CSCHNE: SDIN1   CS4272
+
+MCLKO?  MCLK   12.3MHz
+MCLKI2? SCLK    3.08MHz
+CDATO?  SDOUT1 714.3kHz?
+CSYNC          23.5kHz
+
+LM3488:
+FA/SYNC/SD: 26KOhm? (~500kHz)
+
+Danger Will Robinson:
+  With wrong GPIO settings (Or bad codec settings?) it's possible to
+  draw overcurrent when enabling 48V phantom power...
+  (Found it! 3MHZ on the FA/SYNC/SD pin is too much [connected to MCLKO2 via quad-nor])
