@@ -167,15 +167,17 @@ BR7: .ds 1
 usbState: .ds 1
 .equ usbStateSetupInvalid, 0
 .equ usbStateSetAddress, 1
-.equ usbStateIn0Done, 3
-.equ usbStateZeroPad, 4
-.equ usbStateStringCnt, 5
+.equ usbStateIn0Done, 2
+.equ usbStateZeroPad, 3
+.equ usbStateStringCnt, 4
+.equ usbStateHTDData, 5
 .equ usbStateCopyIRAM, 6
-.equ usbStateHTDData, 7
+.equ usbStateCopyXRAM, 7
 usbState2: .ds 1
 .equ usbStateAddressValid, 8
 miscState: .ds 1
 .equ uartEmpty, 16
+.equ swapOutput, 17  ; In 2ch mode, output on terminals 3+4 instead of 1+2
 audioState: .ds 1
 .equ audioIf1On,  24
 .equ audioIf2On,  25
@@ -217,9 +219,15 @@ acgDeltaH: .ds 1
 acgFrqLo: .ds 1
 
 getBuf:  .ds 4
+codecCache: .ds 8  ; CS4272 has 8 registers
+
+envMaxL: .ds 1
+envMaxR: .ds 1
 
 .area CSEG (CODE,ABS)
 _reset: ljmp _start
+.org 3
+	.word infobytes
 .org 0x20
 	ajmp bad_vec
 
@@ -296,6 +304,11 @@ vec_setup_skip_early_ack:
 	acall vec_dispatch
 
 	sjmp loop
+
+fetchx_postinc:
+	movx A, @DPTR
+	inc DPTR
+	ret
 
 fetchc_postinc:
 	clr A
@@ -411,9 +424,9 @@ vec_setup:
 	mov R0, #OEPDCNTX0
 	movx @R0, A
 
+	mov usbState, #0
 	mov txSizeLo, #0
 	mov txSizeHi, #0
-	mov usbState, #0
 
 	mov R1, #SETUP_PKT
 	mov R0, #bmRequestType
@@ -443,7 +456,14 @@ copy_setup_pkt:
 
 setup_htd_got_data:
 setup_htd_no_data:
+	sjmp setup_dispatch
+
 setup_dth:
+	; Assume that we read the requested size
+	mov txSizeLo, wLengthLo
+	mov txSizeHi, wLengthHi
+
+setup_dispatch:
 	mov DPTR, #(setup_dispatch_table - 2)
 setup_dispatch_check_next:
 	inc DPTR
@@ -507,6 +527,12 @@ setup_dispatch_table:
 	setup_entry 0x80 6 setup_dth_dev_get_descriptor
 	setup_entry 0xc0 0x90 setup_dth_vend_read_xram
 	setup_entry 0x40 0x91 setup_dth_vend_write_xram
+	setup_entry 0xc0 0x94 setup_dth_vend_read_code
+	setup_entry 0xc0 0x96 setup_dth_vend_read_iram
+	setup_entry 0x40 0x97 setup_dth_vend_write_iram
+	setup_entry 0xc0 0x9a setup_dth_vend_read_codec
+	setup_entry 0x40 0x9b setup_dth_vend_write_codec
+	setup_entry 0xc0 0xa0 setup_dth_vend_read_envelope
 	setup_entry 0xa1 0x81 setup_dth_class_if_get_cur
 	setup_entry 0xa1 0x82 setup_dth_class_if_get_min
 	setup_entry 0xa1 0x83 setup_dth_class_if_get_max
@@ -520,32 +546,57 @@ setup_dispatch_table:
 	setup_entry 0x01 0x0b setup_htd_dev_set_interface
 	.byte 0xff, 0xff
 
+setup_dth_vend_read_iram:
+	mov txPtrLo, wIndexLo
+	ajmp writei_to_ep0
+
+setup_dth_vend_read_codec:
+	; CS4272 regs are at addr 1 to 8
+	mov A, wIndexLo
+	dec A
+	anl A, #7
+	add A, #codecCache
+	mov txPtrLo, A  ; read cache value
+	ajmp writei_to_ep0
+
 setup_dth_vend_read_xram:
-	mov DPL, wIndexLo
-	mov DPH, wIndexHi
-	movx A, @DPTR
-	mov R0, #EP0_IN
-	movx @R0, A
+	mov txPtrLo, wIndexLo
+	mov txPtrHi, wIndexHi
+	ajmp writex_to_ep0
+
+setup_dth_vend_read_code:
+	mov txPtrLo, wIndexLo
+	mov txPtrHi, wIndexHi
+	ajmp write_to_ep0
+
+setup_dth_vend_read_envelope:
 	clr A
-	mov R0, #OEPDCNTX0
-	movx @R0, A
-	inc A
-	mov R0, #IEPDCNTX0
-	movx @R0, A
-	setb usbStateIn0Done
-	ret
+	xch A, envMaxL
+	mov getBuf, A
+	clr A
+	xch A, envMaxR
+	mov getBuf+1, A
+	mov txPtrLo, #getBuf
+	ajmp writei_to_ep0
+
+setup_dth_vend_write_iram:
+	mov R0, wIndexLo
+	mov A, wValueLo
+	mov @R0, A
+	ajmp write_to_ep0  ; 0-byte write
+
+setup_dth_vend_write_codec:
+	mov R2, wIndexLo
+	mov R3, wValueLo
+	acall codec_spi_write
+	ajmp write_to_ep0  ; 0-byte write
 
 setup_dth_vend_write_xram:
 	mov DPL, wIndexLo
 	mov DPH, wIndexHi
 	mov A, wValueLo
 	movx @DPTR, A
-	clr A
-	mov R0, #IEPDCNTX0
-	movx @R0, A
-	mov R0, #OEPDCNTX0
-	movx @R0, A
-	ret
+	ajmp write_to_ep0  ; 0-byte write
 
 setup_htd_class_if_set_min:
 setup_htd_class_if_set_max:
@@ -804,6 +855,9 @@ set_interface_if1_as1_16bit_2ch:
 	jb audio24bit, set_interface_error
 set_interface_if1_as1_16bit_2ch_do:
 	mov DPTR, #codec_out_2ch_16bit
+	jnb swapOutput, set_interface_if1_as1_16bit_2ch_do_unswapped
+	mov DPTR, #codec_out_2ch_16bit_alt
+set_interface_if1_as1_16bit_2ch_do_unswapped:
 	acall usb_init_loop
 	sjmp set_interface_if1_exit_on_16bit
 
@@ -820,6 +874,9 @@ set_interface_if1_as3_24bit_2ch:
 	jnb audio24bit, set_interface_error
 set_interface_if1_as3_24bit_2ch_do:
 	mov DPTR, #codec_out_2ch_24bit
+	jnb swapOutput, set_interface_if1_as3_24bit_2ch_do_unswapped
+	mov DPTR, #codec_out_2ch_24bit_alt
+set_interface_if1_as3_24bit_2ch_do_unswapped:
 	acall usb_init_loop
 	sjmp set_interface_if1_exit_on_24bit
 
@@ -882,6 +939,7 @@ vec_sof_waitlock:
 	dec A
 	mov freqLockCtr, A
 vec_sof_waitlock_nodec:
+
 	ret
 
 vec_sof_softpll:
@@ -962,6 +1020,7 @@ vec_sof_softpll_carry_loop:
 	acall serial_hex
 
 vec_sof_noprint:
+	lcall update_envelope
 	ret
 
 
@@ -979,6 +1038,10 @@ dispatch_loop:
 dispatch_do:
 	acall fetchc_postinc
 	jmp @A+DPTR
+
+writex_to_ep0:
+	setb usbStateCopyXRAM
+	sjmp write_to_ep0
 
 writei_to_ep0:
 	setb usbStateCopyIRAM
@@ -1017,11 +1080,15 @@ write_to_ep0_copy:
 
 	; Copy data into EP0 xmit buffer
 desc_copy_loop:
-	jnb usbStateCopyIRAM, desc_copy_xram
-	acall fetchi_postinc
+	jb usbStateCopyIRAM, desc_copy_iram
+	jb usbStateCopyXRAM, desc_copy_xram
+	acall fetchc_postinc
 	sjmp desc_copy_write
 desc_copy_xram:
-	acall fetchc_postinc
+	acall fetchx_postinc
+	sjmp desc_copy_write
+desc_copy_iram:
+	acall fetchi_postinc
 desc_copy_write:
 	movx @R0, A
 	inc R0
@@ -1202,6 +1269,16 @@ codec_spi_write:
 	acall codec_spi_byte
 	setb P1.3 ; SPICS
 	setb P1.1 ; SPICLK
+
+	; Save written value in cache for later 'read'
+	mov A, R2
+	dec A
+	anl A, #7
+	add A, #codecCache
+	mov R0, A
+	mov A, R3
+	mov @R0, A
+
 codec_spi_init_end:
 	ret
 
@@ -1227,6 +1304,95 @@ codec_spi_bit:
 	setb P1.1
 	djnz R0, codec_spi_bit
 	ret
+
+.equ ENVELOPE_SRC, EP1_OUTX
+update_envelope:
+	jb audio24bit, update_envelope_24bit
+
+update_envelope_16bit:
+	; Short on cycles, just sampling the data...
+	; Buffer data  is stored least significant byte first
+
+	; Left channel
+	mov R2, envMaxL
+	mov DPTR, #(ENVELOPE_SRC + 1)  ; L1
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 1 + (4 * 1))  ; L2
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 1 + (4 * 7))  ; L3
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 1 + (4 * 17))  ; L4
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 1 + (4 * 23))  ; L5
+	acall update_max
+	mov envMaxL, R2
+
+	; Right channel
+	mov R2, envMaxR
+	mov DPTR, #(ENVELOPE_SRC + 3)  ; R1
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 3 + (4 * 1))  ; R2
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 3 + (4 * 7))  ; R3
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 3 + (4 * 17))  ; R4
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 3 + (4 * 23))  ; R5
+	acall update_max
+	mov envMaxR, R2
+	ret
+
+update_envelope_24bit:
+	; Short on cycles, just sampling the data...
+	; Buffer data  is stored least significant byte first
+
+	; Left channel
+	mov R2, envMaxL
+	mov DPTR, #(ENVELOPE_SRC + 2)  ; L1
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 2 + (6 * 1))  ; L2
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 2 + (6 * 7))  ; L3
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 2 + (6 * 17))  ; L4
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 2 + (6 * 23))  ; L5
+	acall update_max
+	mov envMaxL, R2
+
+	; Right channel
+	mov R2, envMaxR
+	mov DPTR, #(ENVELOPE_SRC + 5)  ; R1
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 5 + (6 * 1))  ; R2
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 5 + (6 * 7))  ; R3
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 5 + (6 * 17))  ; R4
+	acall update_max
+	mov DPTR, #(ENVELOPE_SRC + 5 + (6 * 23))  ; R5
+	acall update_max
+	mov envMaxR, R2
+	ret
+
+update_max:
+	movx A, @DPTR
+	; Make abs value
+	jnb ACC.7, 1$
+	cpl A
+1$:
+	; Compare to envMax
+	cjne A, AR2, 3$
+2$:
+	; Less or equal
+	ret
+3$:
+	jc 2$  ; Jump if A < envMax
+	; Greater, update envMax
+	mov R2, A
+	ret
+
+.ascii "DATA"
 
 usb_init_data:
 .byte IEPCNF0, 0x8c  ; IEPCNF0 = 0x8c (Enable EP & irq, stalled)
@@ -1307,6 +1473,11 @@ codec_out_2ch_16bit:
 .byte OEPCNF1, 0xc3  ; Enable, isochronous, double-buffered, not stalled, 4 bytes per sample
 .byte 0x00
 
+codec_out_2ch_16bit_alt:
+.byte DMATSL0, 0x22  ; Enable slots 1,5
+.byte OEPCNF1, 0xc3  ; Enable, isochronous, double-buffered, not stalled, 4 bytes per sample
+.byte 0x00
+
 codec_out_4ch_16bit:
 .byte DMATSL0, 0x33  ; Enable slots 0,1,4,5
 .byte OEPCNF1, 0xc7  ; Enable, isochronous, double-buffered, not stalled, 8 bytes per sample
@@ -1314,6 +1485,11 @@ codec_out_4ch_16bit:
 
 codec_out_2ch_24bit:
 .byte DMATSL0, 0x11  ; Enable slots 0,4
+.byte OEPCNF1, 0xc5  ; Enable, isochronous, double-buffered, not stalled, 6 bytes per sample
+.byte 0x00
+
+codec_out_2ch_24bit_alt:
+.byte DMATSL0, 0x22  ; Enable slots 1,5
 .byte OEPCNF1, 0xc5  ; Enable, isochronous, double-buffered, not stalled, 6 bytes per sample
 .byte 0x00
 
@@ -1401,7 +1577,7 @@ usb_word 0x0100   ; Device version (1.00)
 usb_cnf_desc:
 .byte 0x09, CONFIGURATION_DESCRIPTOR  ; Size, type (config)
 usb_word usb_cnf_len ; Total length
-.byte 3           ; bNumInterfaces
+.byte 4           ; bNumInterfaces
 .byte 1           ; bConfigurationValue
 .byte 0           ; iConfiguration
 .byte 0x80        ; bmAttributes (bus powered)
@@ -1593,6 +1769,13 @@ usb_word 0 ; wLockDelay         0x0000
 
 .my_if2_desc
 
+.macro .my_if3_desc
+; IF 3 Altsetting 0: Vendor control, no EPs
+.usb_if_desc     3 0 0 0xff 0xff 0xff 0
+.endm
+
+.my_if3_desc
+
 usb_cnf_end:
 .equ usb_cnf_len, (usb_cnf_end - usb_cnf_desc)
 
@@ -1620,3 +1803,11 @@ message_rst:
 sum 0 5
 
 .word usb_cnf_len
+
+infobytes:
+.word EP1_OUTX
+.word EP1_OUTY
+.word EP2_INX
+.word EP2_INY
+.byte #envMaxL
+.byte #envMaxR
