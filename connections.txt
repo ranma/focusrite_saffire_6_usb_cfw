@@ -8,14 +8,18 @@ TUSB3200   CS4272          AK4384   Comment
 29 P1.4                             unused? (high level)
 30 P1.5                             TP1/LD1 ("T2EX")
 31 P1.6                             Amplifier power control (1=off, 0=on) ("CLKOUT") (high on power-on, then low)
-32 P1.7                             Reset buffer? (1=reset, 0=normal) TR1 ("T2") (high on power-on, then low)
+32 P1.7                             Codec reset (1=reset, 0=normal) via TR1 ("T2") (high on power-on, then low)
+34 CSCLK                            Connected to MCLKI2?
 35 CSYNC
 36 CDATO   7 SDIN
 38 CDATI                   3 SDTI
 40 CSCHNE  6 SDOUT (via R)
 44 MCLKO   3 MCLK
 45 MCLKO2                           Synchronizing freq for 48V phantom power step-up (384KHz @ 48KHz sampling rate)
+47 MCLKI                            Tied to DGND/DVss
 48 MCLKI2  5 SCLK          2 BICK
+  TR1 out  14 RST          5 PDN
+                           9 P/S    Tied to VDD (parallel mode, no SPI control)
 
 I2S Mode 4:
 CSYNC:  LRCK
@@ -32,6 +36,37 @@ CSYNC          23.5kHz
 
 LM3488:
 FA/SYNC/SD: 26KOhm? (~500kHz)
+
+Feedback reference voltage: 1.26V
+Feedback divider: 22kOhm + 621 Ohm => 45.9V setpoint?
+ (1.26 / (621 / (22000 + 621)) => 45.90163)
+
+Isense threshold voltage (Vsense): 156mV
+Isense shortcircuit detection voltage (Vsc): 343mV
+Isense feedback resistor: 0.33Ohm
+=> Threshold current ~472mA
+
+R46: 1.5kOhm ("The EIA-96 SMD resistor code 18B stands for 1.5 kΩ / 1%" matches the measured value)
+R99: 11kOhm ("EIA-96 SMD resistor code 05C stands for 11 kΩ / 1%" matches the measured value)
+
+R99 is part of the compensation network
+
+R46 is the sync series resistor (but seems to be too small?!?)
+DS recommends
+Toff(sync)(us)  Rsync range kOhm
+1 (~1MHz)       5-13
+2               20-40
+3               40-65
+4               55-90
+5               70-110
+6               85-140
+7               100-160
+8               120-190
+9               135-215
+10 (~100kHz)    150-240
+
+DS Tfa curve shows ~35 kOhm for 384kHz if Tfa-based timing is used?
+
 
 Danger Will Robinson:
   With wrong GPIO settings (Or bad codec settings?) it's possible to
