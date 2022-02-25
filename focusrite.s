@@ -789,13 +789,6 @@ setup_htd_dev_set_configuration:
 	movx A, @R0
 	setb ACC.0
 	movx @R0, A
-	; Basic codec setup (sets up clock)
-	; Called again since some settings (e.g. ACGDCTL) don't take unless c-port is enabled already
-	; FIXME: There is probably a better "proper" order for these writes.
-	; This also sets up ~384KHz MCKLO2, which is needed for syncing the 48V step-up.
-	; The wrong step-up sync frequency (in particular too high, observed with 3MHz MCLKO2)
-	; can cause overcurrent from keeping the MOSFET on for too long!
-	acall codec_init
 
 	; Enable PSOF/SOF interrupt
 	mov sofCtr, #0x00
@@ -804,6 +797,27 @@ setup_htd_dev_set_configuration:
 	movx A, @R0
 	orl A, #0x18
 	movx @R0, A
+
+	mov R0, #ACGCTL
+	mov A, #0x50  ; Enable MCLKO, capture source MCLKO, input is MCLKI2, divider disabled
+	movx @R0, A
+	mov R0, #ACGDCTL
+	mov A, #0x17  ; divm is 2 (MCLKO), divi is 8 (MCLKI2)
+	movx @R0, A
+	; Enable divider:
+	; A.5.3.7:  "The MCU should program the MCLK input select bit, the MCLK capture source bit and the MCLK output enable bit before setting this bit to a 1"
+	mov R0, #ACGCTL
+	mov A, #0x54  ; Enable MCLKO, capture source MCLKO, input is MCLKI2, divider enabled
+	movx @R0, A
+	; ACGDCTL (in particular divi counter) has trouble loading
+	; properly sometimes (some strange timing issue with the latch?)
+	; Load it repeatedly just to be sure.
+	mov R0, #ACGDCTL
+	mov A, #0x17
+	mov R1, #0
+acgdctl_safety_loop:
+	movx @R0, A
+	djnz R1, acgdctl_safety_loop
 
 	ret
 
@@ -993,6 +1007,11 @@ vec_sof_softpll_carry_loop:
 	; Final write to ACGFRQ0 to load latch
 	mov R0, #ACGFRQ0
 	mov A, R2
+	movx @R0, A
+
+	; For safety, also load ACGDCTL every SOF
+	mov R0, #ACGDCTL
+	mov A, #0x17  ; divm is 2 (MCLKO), divi is 8 (MCLKI2)
 	movx @R0, A
 
 	djnz sofCtr, vec_sof_noprint
@@ -1425,8 +1444,6 @@ codec_init_data:
 .byte ACGFRQ1, 0xa8
 .byte ACGFRQ2, 0x61 ; 0x61a800 => 24.576MHz MCLK => 48kHz
 .byte ACGFRQ0, 0x00
-.byte ACGCTL, 0x54  ; Enable MCLKO, capture source MCLKO, input is MCLKI2, enable divider
-.byte ACGDCTL, 0x17 ; divm is 2 (MCLKO), divi is 8 (MCLKI2)
 .byte CPTCNF1, 0x0c  ; 2 time slot per frame; i2s mode 4 6ch out 2ch in
 .byte CPTCNF2, 0xcd  ; 32/32 csclk per slot, 16bits per slot
 ;.byte CPTCNF2, 0xe5  ; 32/32 csclk per slot, 24bits per slot
