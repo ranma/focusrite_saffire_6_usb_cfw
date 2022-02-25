@@ -3,6 +3,8 @@ Custom firmware for the Focusrite Saffire 6 USB audio interface
 
 This replaces the stock firmware with a USB Audio Class compatible one.
 
+Before trying to use this, first read the disclaimer at the end!
+
 ## Unimplemented
 
 - Midi (I don't have any midi devies and I'm using the midi port for the debug serial output)
@@ -47,6 +49,6 @@ bootloader and then writing the backed up firmware back into the EEPROM.
 - Your mileage may vary, no warranties, yada yada
 - I'm fairly certain no smoke will come out since I fixed the "frequency
   too high bug", but it _is_ possible for 48V phantom step-up converter
-  coil to start smoking if something goes wrong, see the note in
-  connections.txt... If not caught early enought his may damage the
-  device permanetly.
+  coil or MOSFET to start smoking if something goes wrong, see the note in
+  connections.txt and ... If not caught early enough his may damage the
+  device permanently. You have been warned.
