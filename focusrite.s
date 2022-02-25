@@ -227,6 +227,8 @@ envMaxR: .ds 1
 .area CSEG (CODE,ABS)
 _reset: ljmp _start
 .org 3
+	ljmp vec_int0
+.org 6
 	.word infobytes
 .org 0x20
 	ajmp bad_vec
@@ -237,6 +239,7 @@ _reset: ljmp _start
 	mov R7, A
 	ajmp uart_vec
 
+vec_int0:
 bad_vec:
 	clr TI
 	mov SBUF, #'!'
@@ -1324,13 +1327,13 @@ codec_spi_bit:
 	djnz R0, codec_spi_bit
 	ret
 
-.equ ENVELOPE_SRC, EP1_OUTX
+.equ ENVELOPE_SRC, EP2_INX
 update_envelope:
 	jb audio24bit, update_envelope_24bit
 
 update_envelope_16bit:
 	; Short on cycles, just sampling the data...
-	; Buffer data  is stored least significant byte first
+	; Buffer data is stored least significant byte first
 
 	; Left channel
 	mov R2, envMaxL
@@ -1442,7 +1445,7 @@ codec_init_data:
 ; 1171875 / 48000
 ; 11000.0110101000000000000000000000000000
 .byte ACGFRQ1, 0xa8
-.byte ACGFRQ2, 0x61 ; 0x61a800 => 24.576MHz MCLK => 48kHz
+.byte ACGFRQ2, 0x61  ; 0x61a800 => 24.576MHz MCLK => 48kHz
 .byte ACGFRQ0, 0x00
 .byte CPTCNF1, 0x0c  ; 2 time slot per frame; i2s mode 4 6ch out 2ch in
 .byte CPTCNF2, 0xcd  ; 32/32 csclk per slot, 16bits per slot
