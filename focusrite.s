@@ -777,16 +777,8 @@ setup_htd_dev_set_configuration:
 	mov A, #'c'
 	acall serial_write
 
-	; TODO: Add delays? Seems to work without...
-	; Turn on power
-	clr P1.6
 	; Basic codec setup (sets up clock)
 	acall codec_init
-	; Release reset
-	clr P1.7
-	; External clock, no delay should be needed between releasing
-	; reset and starting the cs4272 control port write.
-	acall codec_spi_init
 	; Enable c-port
 	mov R0, #GLOBCTL
 	movx A, @R0
@@ -812,6 +804,7 @@ setup_htd_dev_set_configuration:
 	mov R0, #ACGCTL
 	mov A, #0x54  ; Enable MCLKO, capture source MCLKO, input is MCLKI2, divider enabled
 	movx @R0, A
+
 	; ACGDCTL (in particular divi counter) has trouble loading
 	; properly sometimes (some strange timing issue with the latch?)
 	; Load it repeatedly just to be sure.
@@ -821,6 +814,19 @@ setup_htd_dev_set_configuration:
 acgdctl_safety_loop:
 	movx @R0, A
 	djnz R1, acgdctl_safety_loop
+
+	; Should be safe to turn on power now (this also ungates the step-up
+	; SYNC signal if phantom power is selected)
+	clr P1.6  ; Turn on power to main analog sections
+
+	; Abuse codec_spi_init as a delay function
+	acall codec_spi_init
+
+	; Release reset
+	clr P1.7
+	; External clock, no delay should be needed between releasing
+	; reset and starting the cs4272 control port write.
+	acall codec_spi_init
 
 	ret
 

@@ -67,6 +67,15 @@ Toff(sync)(us)  Rsync range kOhm
 
 DS Tfa curve shows ~35 kOhm for 384kHz if Tfa-based timing is used?
 
+The step-up SYNC setup is not fail-safe:
+- If fSYNC is too high it fails to switch correctly and draws
+  overcurrent and the LM3488 overcurrent protection is not tripping.
+- If the MCLKO2 is not switching, SYNC is kept low (should be high for
+  step-up power-down), again causing the MOSFET gate to be kept high
+  and drawing overcurrent.
+- At least the power control signal (P1.6) will gate the the SYNC
+  signal at high level, which is safe (LM3488 power-off)
+
 
 Danger Will Robinson:
   With wrong GPIO settings (Or bad codec settings?) it's possible to
